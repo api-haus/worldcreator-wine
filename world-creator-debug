@@ -13,8 +13,6 @@ export WINEPREFIX="$HERE/wineprefix"
 export WINEDEBUG=err+module,fixme-all
 export OIDN_VERBOSE=2
 export EGL_LOG_LEVEL=fatal
-# nvcuda bridge (forwards CUDA Driver API to host libcuda.so) for OIDN GPU denoise
-export WINEDLLPATH="$HERE/nvlibs-build/lib"
 export DOTNET_EnableWriteXorExecute=0
 export MEMCAP_GB="${MEMCAP_GB:-24}"
 export LD_PRELOAD="$HERE/memcap.so"

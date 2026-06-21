@@ -81,6 +81,32 @@ static int capped_meminfo_fd(void) {
 
 static int is_meminfo(const char *p) { return p && strcmp(p, "/proc/meminfo") == 0; }
 
+/* Optional ceiling on committed anonymous memory. World Creator's CUDA path
+ * fills host RAM in a loop until an allocation fails; with MEMCAP_MMAP_GB set,
+ * large writable anonymous mmaps past the cumulative cap return MAP_FAILED so
+ * the loop hits an error it can handle, instead of the kernel OOM-killing the
+ * process. Reservations (PROT_NONE) are not counted — .NET reserves huge
+ * address space up front. */
+#include <sys/mman.h>
+#include <errno.h>
+#include <stdatomic.h>
+static atomic_long g_committed = 0;
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
+    static void *(*real)(void *, size_t, int, int, int, off_t) = 0;
+    if (!real) real = dlsym(RTLD_NEXT, "mmap");
+    const char *e = getenv("MEMCAP_MMAP_GB");
+    if (e && (flags & MAP_ANONYMOUS) && (prot & PROT_WRITE) && len >= (64UL << 20)) {
+        long cap = strtol(e, 0, 10) * 1024L * 1024L * 1024L;
+        long now = atomic_fetch_add(&g_committed, (long)len) + (long)len;
+        if (now > cap) {
+            atomic_fetch_sub(&g_committed, (long)len);
+            errno = ENOMEM;
+            return MAP_FAILED;
+        }
+    }
+    return real(addr, len, prot, flags, fd, off);
+}
+
 int open(const char *path, int flags, ...) {
     static int (*real)(const char *, int, ...) = 0;
     if (!real) real = dlsym(RTLD_NEXT, "open");

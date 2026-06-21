@@ -58,17 +58,14 @@ The launchers resolve their own directory, so place them next to `wineprefix/` a
 
 The denoiser is Intel Open Image Denoise 2.3.3, shipped with only GPU device backends (CUDA, HIP, SYCL) and no CPU backend module. On NVIDIA the path is CUDA, which needs `nvcuda.dll` (the CUDA Driver API), which Wine does not provide. Adding the official `OpenImageDenoise_device_cpu.dll` for OIDN 2.3.3 gives OIDN a CPU device to fall back to.
 
-Denoise does not yet work under Wine, by two separate failures:
+**The `nvcuda` bridge works.** Built from [nvidia-libs](https://github.com/SveSop/nvidia-libs) against the same Wine, it forwards the CUDA Driver API to the host `libcuda.so`. A standalone probe through the bridge succeeds: `cuInit` returns success, `cuDriverGetVersion` reports 13030 (CUDA 13.0), `cuDeviceGetCount` reports one device, and the RTX 5080 is reported as compute capability sm_120. Loading requires the wine builtin layout — the fakedll PE stub in `lib/wine/x86_64-windows/` and the unix `.so` in `lib/wine/x86_64-unix/`, with `WINEDLLPATH` pointing at `lib/wine` — which `build.sh` produces.
 
-- **CUDA path.** An `nvcuda` bridge built from [nvidia-libs](https://github.com/SveSop/nvidia-libs) forwards the CUDA Driver API to the host `libcuda.so`. With the bridge loadable, the application's CUDA-detection path enters an allocation loop at startup that exhausts memory — before any denoise runs, and before the bridge forwards a single CUDA call. The loop is triggered by detection itself.
-- **CPU path.** With no bridge, OIDN selects its CPU device, but enabling denoise then crashes in `Veldrid.ResourceFactory.CreateBuffer` with an access violation. The denoise render pass's buffer setup faults under winevulkan.
+Denoise still does not work under Wine, by two separate failures in World Creator's own code:
 
-Next diagnostics:
+- **CUDA path — the blocking wall.** The moment `nvcuda.dll` is loadable, World Creator's own CUDA detection enters an unbounded allocation that fills host RAM until the process is killed (~47 GB on a 64 GB host). It never calls a single CUDA function — a full trace across the runaway records zero `nvcuda` calls — so the trigger is `nvcuda.dll` loading successfully, not anything the bridge returns. It is World Creator's detection, not OIDN's: hiding `OpenImageDenoise_device_cuda.dll` while keeping `nvcuda` loadable still runs away. The allocation commits via `mprotect` on pre-reserved address space and is not sized to any value the shim can cap. Because the runaway is keyed only to `nvcuda` loadability, and OIDN's CUDA backend needs `nvcuda` loadable in the same process, the two cannot coexist without changing World Creator's behavior. The shim caps reported memory (`sysinfo`, `/proc/meminfo`), a Vulkan layer caps the memory heaps, and an `mmap` ceiling were each tried against it and ruled out — none bound the fill, and a cgroup limit OOM-kills rather than failing an allocation the application could catch.
+- **CPU path.** With no bridge, OIDN selects its CPU device, but enabling denoise then crashes in `Veldrid.ResourceFactory.CreateBuffer` with an access violation. The denoise render pass's buffer setup faults under winevulkan, independent of the OIDN backend.
 
-- Instrument the `nvcuda` bridge to log the exact Driver-API calls the application makes before the loop. A candidate trigger is a driver-version branch: the host reports CUDA 13 / driver 610, and the application may behave badly on a version it was not built against.
-- Isolate the CPU-path `CreateBuffer` crash as a separate winevulkan/Veldrid buffer issue.
-
-`vkheapcap.c` caps the reported Vulkan memory-heap sizes (host-visible and device-local). It was tried against the runaway and ruled out: the loop is not sized to the Vulkan heaps. It remains only as scaffolding for the bridge work.
+Avenues not yet exhausted: intercepting `mprotect` to fail commits past a ceiling so the detection loop hits a catchable error (risks the .NET JIT's own `mprotect` use); a World Creator setting that disables the GPU memory cache, if one exists; or patching the application. `vkheapcap.c` (the Vulkan heap-cap layer) is kept only as scaffolding — it was ruled out as a fix.
 
 ## License
 
