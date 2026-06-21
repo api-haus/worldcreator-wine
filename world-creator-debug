@@ -1,0 +1,24 @@
+#!/bin/sh
+# Same as ./world-creator but with OIDN device-selection logging on and module
+# load errors visible, written to world-creator-debug.log. Trigger a denoise in
+# the app, then read that log to see which OIDN device was chosen (CPU vs CUDA).
+#
+# Output goes straight to a file, never a terminal pipe: the NVIDIA EGL driver
+# spams "failed to create dri2 screen" warnings, and piping that to a terminal
+# that can't drain it fast enough blocks wine's stdout write and hangs the app
+# at the splash. A file write never blocks that way.
+HERE=$(dirname "$(readlink -f "$0")")
+
+export WINEPREFIX="$HERE/wineprefix"
+export WINEDEBUG=err+module,fixme-all
+export OIDN_VERBOSE=2
+export EGL_LOG_LEVEL=fatal
+# nvcuda bridge (forwards CUDA Driver API to host libcuda.so) for OIDN GPU denoise
+export WINEDLLPATH="$HERE/nvlibs-build/lib"
+export DOTNET_EnableWriteXorExecute=0
+export MEMCAP_GB="${MEMCAP_GB:-24}"
+export LD_PRELOAD="$HERE/memcap.so"
+unset DOTNET_ROOT
+
+cd "$WINEPREFIX/drive_c/Program Files/World Creator 2026.4" || exit 1
+exec wine WorldCreator.exe > "$HERE/world-creator-debug.log" 2>&1

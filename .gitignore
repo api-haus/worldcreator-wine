@@ -1,0 +1,18 @@
+# World Creator itself and the Wine prefix containing it — never publish
+wineprefix/
+2026.4/
+*.msi
+*.exe
+
+# external / built / generated
+nvidia-libs/
+nvlibs-build/
+*.so
+*.dll
+
+# diagnostics and scratch from the porting work
+*.log
+*.dmp
+*.txt
+*.gdb
+dxvk.conf

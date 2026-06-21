@@ -1,0 +1,23 @@
+#!/bin/sh
+# World Creator 2026.4 under wine.
+#
+# memcap.so clamps the total-memory value wine derives from sysinfo(). Without
+# it, World Creator sizes a native startup pool to wine's reported RAM+swap
+# (~137 GB on a host with large swap) and dies exhausting memory. MEMCAP_GB
+# caps the reported total so the pool stays sane.
+#
+# DOTNET_EnableWriteXorExecute=0 avoids the .NET 10 JIT tripping over wine's
+# W^X page handling.
+HERE=$(dirname "$(readlink -f "$0")")
+
+export WINEPREFIX="$HERE/wineprefix"
+export WINEDEBUG=-all
+export EGL_LOG_LEVEL=fatal
+# nvcuda bridge (forwards CUDA Driver API to host libcuda.so) for OIDN GPU denoise
+export WINEDLLPATH="$HERE/nvlibs-build/lib"
+export DOTNET_EnableWriteXorExecute=0
+export MEMCAP_GB="${MEMCAP_GB:-24}"
+export LD_PRELOAD="$HERE/memcap.so"
+unset DOTNET_ROOT
+
+exec wine "$WINEPREFIX/drive_c/Program Files/World Creator 2026.4/WorldCreator.exe" "$@"
