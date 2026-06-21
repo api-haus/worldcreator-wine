@@ -1,5 +1,8 @@
-# World Creator itself and the Wine prefix containing it — never publish
+# World Creator itself and any Wine/Proton prefix containing it — never publish
 wineprefix/
+proton-prefix/
+w118pfx/
+*pfx/
 2026.4/
 *.msi
 *.exe

@@ -90,21 +90,44 @@ static int is_meminfo(const char *p) { return p && strcmp(p, "/proc/meminfo") ==
 #include <sys/mman.h>
 #include <errno.h>
 #include <stdatomic.h>
+
+/* One ceiling shared by both ways memory is committed under Wine: a writable
+ * anonymous mmap, and an mprotect that adds PROT_WRITE to a previously-reserved
+ * (PROT_NONE) region — Wine's VirtualAlloc(MEM_COMMIT) takes the latter path.
+ * Only large requests count, so the .NET JIT's and GC's small/early commits
+ * pass; the application's bulk fill is what crosses the cap. MEMCAP_COMMIT_GB
+ * (or the older MEMCAP_MMAP_GB) sets it; unset means no ceiling. */
 static atomic_long g_committed = 0;
+static long commit_cap(void) {
+    const char *e = getenv("MEMCAP_COMMIT_GB");
+    if (!e) e = getenv("MEMCAP_MMAP_GB");
+    return e ? strtol(e, 0, 10) * 1024L * 1024L * 1024L : 0;
+}
+static int over_cap(size_t len) {
+    long cap = commit_cap();
+    if (!cap) return 0;
+    if (atomic_fetch_add(&g_committed, (long)len) + (long)len > cap) {
+        atomic_fetch_sub(&g_committed, (long)len);
+        errno = ENOMEM;
+        return 1;
+    }
+    return 0;
+}
+
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
     static void *(*real)(void *, size_t, int, int, int, off_t) = 0;
     if (!real) real = dlsym(RTLD_NEXT, "mmap");
-    const char *e = getenv("MEMCAP_MMAP_GB");
-    if (e && (flags & MAP_ANONYMOUS) && (prot & PROT_WRITE) && len >= (64UL << 20)) {
-        long cap = strtol(e, 0, 10) * 1024L * 1024L * 1024L;
-        long now = atomic_fetch_add(&g_committed, (long)len) + (long)len;
-        if (now > cap) {
-            atomic_fetch_sub(&g_committed, (long)len);
-            errno = ENOMEM;
-            return MAP_FAILED;
-        }
-    }
+    if ((flags & MAP_ANONYMOUS) && (prot & PROT_WRITE) && len >= (8UL << 20) && over_cap(len))
+        return MAP_FAILED;
     return real(addr, len, prot, flags, fd, off);
+}
+
+int mprotect(void *addr, size_t len, int prot) {
+    static int (*real)(void *, size_t, int) = 0;
+    if (!real) real = dlsym(RTLD_NEXT, "mprotect");
+    if ((prot & PROT_WRITE) && len >= (8UL << 20) && over_cap(len))
+        return -1;
+    return real(addr, len, prot);
 }
 
 int open(const char *path, int flags, ...) {
