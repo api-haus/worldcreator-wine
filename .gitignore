@@ -1,5 +1,6 @@
 # World Creator itself and any Wine/Proton prefix containing it — never publish
 wineprefix/
+*wineprefix*/
 proton-prefix/
 w118pfx/
 *pfx/

@@ -47,13 +47,15 @@ The launchers resolve their own directory; keep them next to `wineprefix/` and `
 
 ## Gotchas
 
-- **`DOTNET_ROOT` leaks into Wine.** If the host sets `DOTNET_ROOT` for a Linux dotnet install, the Windows apphost follows it to `Z:\usr\share\dotnet` and fails with a missing `hostfxr.dll`. The launchers `unset DOTNET_ROOT`.
+- **The apphost must be pointed at the in-prefix runtime.** `WorldCreator.exe` has no embedded search path; it resolves the runtime from `DOTNET_ROOT[_X64]`, else the registry key `HKLM\SOFTWARE\dotnet\Setup\InstalledVersions\x64\InstallLocation`, else the `%ProgramFiles%\dotnet` known-folder. A host `DOTNET_ROOT=/usr/share/dotnet` leaks into Wine and mis-resolves to `Z:\usr\share\dotnet`; merely clearing it then leaves resolution on the registry/known-folder probe, which yields "must install .NET Desktop Runtime" whenever that registry key is missing (the desktop-runtime installer writes it; deleting `HKLM\SOFTWARE\dotnet` drops it). The launchers set `DOTNET_ROOT='C:\Program Files\dotnet'` — an explicit Windows path that overrides the leak and skips the probe entirely.
 - **`mscoree` must stay builtin at run time.** Disabling it to skip the Mono prompt during init is fine, but an `mscoree=d` override while running makes the CoreCLR managed assemblies fail to load with a misleading "Module not found".
 - **EGL warning spam.** The NVIDIA EGL driver prints `failed to create dri2 screen` repeatedly. It is harmless, but piping it to a terminal that cannot drain it fast enough blocks the application's stdout and hangs it at the splash. The launchers log to a file and set `EGL_LOG_LEVEL=fatal`.
 
 ## GPU denoise
 
-The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `build.sh` assembles the three pieces it requires, and `world-creator-denoise` enables them.
+The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `build.sh` assembles the pieces it requires, and `world-creator-denoise` enables them.
+
+- **Prefix runtime deps (`vcrun2022` + `dxvk`)** — GPU denoise needs the MSVC runtime the native OIDN DLLs link against and the DXVK D3D→Vulkan path. Without them the denoiser toggles on but produces **no output** (and dropping an OIDN `_device_cpu.dll` in alongside makes it render **black** instead — that CPU backend is a dead end, it never denoises). `build.sh` installs both; skipping them is the usual cause of "denoiser does nothing."
 
 - **nvcuda bridge** — built from [nvidia-libs](https://github.com/SveSop/nvidia-libs), forwarding the CUDA Driver API to host `libcuda.so`. It loads as a builtin split DLL via `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH`.
 - **Bridge patch (`tools/patch-nvcuda/`)** — OIDN imports the Vulkan buffers via `cuImportExternalMemory` (`OPAQUE_WIN32`). The stock bridge resolves the handle through Proton's `IOCTL_SHARED_GPU_RESOURCE` device, absent in Wine 11.11, so the import fails and denoise renders black. The patch opens the handle's D3DKMT shared resource instead, the way win32u does.
@@ -64,7 +66,7 @@ The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on N
 
 Some World Creator versions enter a memory runaway during startup: a few seconds in, the process begins committing host memory at ~2.5 GB/s and climbs toward tens of GB without settling, until it is killed. It does not recover on its own; left alone it exhausts host RAM and starves the desktop.
 
-It is **bimodal and non-deterministic**. The same build, same machine, same inputs boots clean on some attempts (RSS settles ~1.5 GB and the session is stable for its whole life, large terrains and high resolution included) and runs away on others. Roughly 40–70% of boots are clean, with no relation to anything the user does.
+It is **bimodal and non-deterministic**. The same build, same machine, same inputs boots clean on some attempts (RSS settles ~1.5 GB and the session is stable for its whole life, large terrains and high resolution included) and runs away on others, with no relation to anything the user does. The clean rate is **machine-dependent and can be low** — on an RTX 5080 it has been ~1 in 10 (seven-plus runaways before a clean boot), so the relaunch loop may need many tries.
 
 ### What it is — and is not
 
@@ -81,7 +83,7 @@ The diverging factor between a clean and a runaway boot is internal timing in Wo
 ### Living with it
 
 - **For reliable GPU denoise, use World Creator 2025.1** with the Veldrid patch (`build.sh` applies it to whatever version is installed). 2025.1 boots clean every time and denoises on the RTX 5080.
-- **On 2025.2 and later (including 2026.x)** the runaway is unavoidable in World Creator's code, so `world-creator-denoise` works around it rather than preventing it: it guards the startup window with a hard RSS kill-switch (kill at 5 GB RSS or below 12 GB `MemAvailable`), kills a filling boot before it can starve the host, and relaunches until one lands clean — usually one or two tries. That is the "it works sometimes" behaviour made automatic. Once a boot is clean the guard disarms, and on exit (quit, Ctrl-C, or close) it reaps its whole wine session so nothing lingers. Tunable via `WC_KILL_RSS_MB`, `WC_GUARD_WINDOW_S`, `WC_MAX_TRIES`.
+- **On 2025.2 and later (including 2026.x)** the runaway is unavoidable in World Creator's code, so `world-creator-denoise` works around it rather than preventing it: it guards the startup window with a hard RSS kill-switch (kill at 5 GB RSS or below 12 GB `MemAvailable`), kills a filling boot before it can starve the host, and relaunches until one lands clean. At a ~1-in-10 clean rate that can take many tries, so the default ceiling is 30 (`WC_MAX_TRIES`). That is the "it works sometimes" behaviour made automatic. Once a boot is clean the guard disarms, and on exit (quit, Ctrl-C, or close) it reaps its whole wine session so nothing lingers. Tunable via `WC_KILL_RSS_MB`, `WC_GUARD_WINDOW_S`, `WC_MAX_TRIES`.
 
 ## License
 

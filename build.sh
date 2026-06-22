@@ -12,8 +12,19 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 WC_DIR="${WC_INSTALL_DIR:-$HERE/wineprefix/drive_c/Program Files/World Creator 2026.4}"
+WINEPREFIX="${WINEPREFIX:-$HERE/wineprefix}"; export WINEPREFIX
 
-echo "[1/3] vkheapcap.so (Vulkan layer)"
+echo "[1/4] prefix deps: vcrun2022 + dxvk"
+# GPU denoise needs both: the MSVC runtime (vcrun2022) for the native OIDN DLLs, and
+# DXVK for the D3D->Vulkan path. Without them the denoiser enables but produces no
+# output (and adding an OIDN cpu backend on top renders black). winetricks is idempotent.
+if command -v winetricks >/dev/null; then
+  winetricks -q vcrun2022 dxvk
+else
+  echo "  WARNING: winetricks not found — install vcrun2022 + dxvk manually or GPU denoise will not work"
+fi
+
+echo "[2/4] vkheapcap.so (Vulkan layer)"
 if [ -f /usr/include/vulkan/vk_layer.h ]; then
   gcc -O2 -fPIC -shared -o "$HERE/vkheapcap.so" "$HERE/vkheapcap.c"
   mkdir -p "$HOME/.local/share/vulkan/implicit_layer.d"
@@ -23,7 +34,7 @@ else
   echo "  skipped: Vulkan headers not found"
 fi
 
-echo "[2/3] nvcuda bridge (GPU denoise)"
+echo "[3/4] nvcuda bridge (GPU denoise)"
 if command -v x86_64-w64-mingw32-gcc >/dev/null && command -v meson >/dev/null; then
   if [ ! -d "$HERE/nvidia-libs" ]; then
     git clone --depth 1 https://github.com/SveSop/nvidia-libs.git "$HERE/nvidia-libs"
@@ -39,8 +50,16 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null && command -v meson >/dev/null; 
 else
   echo "  skipped: need mingw-w64-gcc + meson + ninja"
 fi
+# OIDN's CUDA backend does LoadLibrary("nvcuda.dll"); the WINEDLLOVERRIDES/WINEDLLPATH
+# the launcher sets are not enough on their own — the PE half must be visible in the
+# prefix's system32 or the denoiser enables but silently does nothing.
+PE_NVCUDA="$HERE/nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll"
+if [ -f "$PE_NVCUDA" ] && [ -d "$WINEPREFIX/drive_c/windows/system32" ]; then
+  ln -sf "$PE_NVCUDA" "$WINEPREFIX/drive_c/windows/system32/nvcuda.dll"
+  echo "  linked nvcuda.dll into prefix system32"
+fi
 
-echo "[3/3] World Creator install patches"
+echo "[4/4] World Creator install patches"
 if [ -d "$WC_DIR" ]; then
   WC_INSTALL_DIR="$WC_DIR" "$HERE/tools/patch-veldrid/patch-veldrid.sh"
   if [ -f "$WC_DIR/octane.dll" ]; then

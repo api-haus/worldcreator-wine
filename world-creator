@@ -10,6 +10,9 @@ export WINEPREFIX="$HERE/wineprefix"
 export WINEDEBUG=-all
 export EGL_LOG_LEVEL=fatal
 export DOTNET_EnableWriteXorExecute=0
-unset DOTNET_ROOT
+# Force the apphost to the in-prefix Windows runtime. A host DOTNET_ROOT (e.g.
+# /usr/share/dotnet) leaks into wine and resolves to Z:\usr\share\dotnet (Linux
+# binaries) -> "must install .NET Desktop Runtime"; this explicit Windows path wins.
+export DOTNET_ROOT='C:\Program Files\dotnet'
 
 exec wine "$WINEPREFIX/drive_c/Program Files/World Creator 2026.4/WorldCreator.exe" "$@"
