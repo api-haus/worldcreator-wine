@@ -62,13 +62,6 @@ setup_prefix_wide() {   # everything shared by all versions; all steps idempoten
     winetricks -q vcrun2022 corefonts fontsmooth=rgb
   else echo "  WARNING: winetricks not found — install vcrun2022 or WorldCreator.exe won't start"; fi
 
-  if [ -f /usr/include/vulkan/vk_layer.h ]; then
-    gcc -O2 -fPIC -shared -o "$HERE/vkheapcap.so" "$HERE/vkheapcap.c"
-    mkdir -p "$HOME/.local/share/vulkan/implicit_layer.d"
-    sed "s#@LIB@#$HERE/vkheapcap.so#" "$HERE/wc_heapcap.json.in" \
-      > "$HOME/.local/share/vulkan/implicit_layer.d/wc_heapcap.json"
-  fi
-
   if command -v x86_64-w64-mingw32-gcc >/dev/null && command -v meson >/dev/null; then
     if [ ! -d "$HERE/nvidia-libs" ]; then
       git clone --depth 1 https://github.com/SveSop/nvidia-libs.git "$HERE/nvidia-libs"

@@ -2,7 +2,7 @@
 
 Launchers and patches that run BiteTheBytes' World Creator — a Windows .NET desktop application with a Veldrid/Vulkan renderer — under Wine on Linux, including the GPU (CUDA/OIDN) viewport denoiser on NVIDIA. World Creator itself is not included; install it from your own licensed copy.
 
-Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and .NET 10.0.8.
+Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and .NET 10.0.9.
 
 ## What's here
 
@@ -11,7 +11,6 @@ Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and 
 - `world-creator` / `world-creator-denoise` — back-compat 2026.4 shortcuts over `wc` (baseline / GPU denoise).
 - `build.sh` — back-compat shim: prefix setup + patch an already-installed 2026.4.
 - `tools/patch-nvcuda/`, `tools/patch-veldrid/` — the two source patches the GPU denoiser needs (below).
-- `vkheapcap.c` + `wc_heapcap.json.in` — a Vulkan layer that caps the reported host-visible heap size.
 
 ## Setup
 
@@ -47,7 +46,7 @@ The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on N
 - **`nvcuda.dll` in the prefix `system32`** — OIDN's CUDA backend does `LoadLibrary("nvcuda.dll")`, and the `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH` the launcher sets are **not** enough on their own: the bridge's PE half must be visible in the prefix's `system32`, or the denoiser toggles on and silently does nothing. `install-wc.sh` symlinks it (`…/nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll`).
 - **`vcrun2022` (MSVC runtime) — required to launch.** `WorldCreator.exe`'s native libraries link the Microsoft Visual C++ runtime; without it the .NET app won't start at all (coreclr/`libicuuc` load failure). `install-wc.sh` installs it. (An OIDN `_device_cpu.dll` is a dead end — it never denoises, only renders **black** — so don't add one.)
 
-**DXVK is not needed** — World Creator is Vulkan-native (Veldrid → winevulkan), so nothing translates D3D. Leave-one-out on 2025.1 (deterministic) confirms the **minimal denoise set**: the Veldrid patch, the D3DKMT bridge patch, the nvcuda bridge + `system32` symlink, and `vcrun2022` — removing any one breaks denoise (crash / black / black / no-launch); DXVK, fonts, and vkheapcap do not.
+**DXVK is not needed** — World Creator is Vulkan-native (Veldrid → winevulkan), so nothing translates D3D. Leave-one-out on 2025.1 (deterministic) confirms the **minimal denoise set**: the Veldrid patch, the D3DKMT bridge patch, the nvcuda bridge + `system32` symlink, and `vcrun2022` — removing any one breaks denoise (crash / black / black / no-launch). DXVK and fonts do not.
 
 - **nvcuda bridge** — built from [nvidia-libs](https://github.com/SveSop/nvidia-libs), forwarding the CUDA Driver API to host `libcuda.so`. It loads as a builtin split DLL via `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH`.
 - **Bridge patch (`tools/patch-nvcuda/`)** — OIDN imports the Vulkan buffers via `cuImportExternalMemory` (`OPAQUE_WIN32`). The stock bridge resolves the handle through Proton's `IOCTL_SHARED_GPU_RESOURCE` device, absent in Wine 11.11, so the import fails and denoise renders black. The patch opens the handle's D3DKMT shared resource instead, the way win32u does.
@@ -68,15 +67,15 @@ A version bisect places the regression precisely: **2025.1 never runs away; 2025
 - **Not swap or the reported pagefile** — disabling swap does not help; the runaway still claims host memory.
 - **Not the GPU-denoise / CUDA path** — the baseline renderer with no `nvcuda` bridge loaded runs away too; the bridge is not required to trigger it.
 - **Not the .NET runtime** — 2025.1 and 2025.6 are both `net8` and both run on the same installed runtime via roll-forward, yet one is clean and the other is not.
-- **Not boundable by faking the reported memory** — capping the `sysinfo` figure has no effect (World Creator does not size its allocation to it), and capping `/proc/meminfo` instead makes its allocate-until-free-memory-drops loop never terminate. No in-process cap bounds it without corrupting the process, and no external lever (CPU affinity, in-process GPU pre-warm, memory caps) makes a boot deterministically clean. (An earlier `memcap` `LD_PRELOAD` shim that capped `sysinfo` was removed once testing showed it changed nothing.)
+- **Not boundable by a memory cap** — World Creator does not size its allocation to any reported figure, so caps do nothing and runaways blow straight past them; a `sysinfo` shim and a `vkheapcap` Vulkan layer were both tried and removed as no-ops.
 
-The diverging factor between a clean and a runaway boot is internal timing in World Creator's (obfuscated) startup, not any value the environment can set — which is why it presents as random and cannot be fixed from outside the application.
+The diverging factor between a clean and a runaway boot is internal timing in World Creator's (obfuscated) startup, not any value the environment can set — which is why it presents as random and cannot be fixed from outside the application. The relaunch guard below is the only thing that helps.
 
 ### Living with it
 
-- **For reliable GPU denoise, use World Creator 2025.1** with the Veldrid patch (`build.sh` applies it to whatever version is installed). 2025.1 boots clean every time and denoises on the RTX 5080.
+- **For reliable GPU denoise, use World Creator 2025.1** with the Veldrid patch (`install-wc.sh` applies it). 2025.1 boots clean every time and denoises on the RTX 5080.
 - **On 2025.2 and later (including 2026.x)** the runaway is unavoidable in World Creator's code, so `world-creator-denoise` works around it rather than preventing it: it guards the startup window with a hard RSS kill-switch (kill at 5 GB RSS or below 12 GB `MemAvailable`), kills a filling boot before it can starve the host, and relaunches until one lands clean. At a ~1-in-10 clean rate that can take many tries, so the default ceiling is 30 (`WC_MAX_TRIES`). That is the "it works sometimes" behaviour made automatic. Once a boot is clean the guard disarms, and on exit (quit, Ctrl-C, or close) it reaps its whole wine session so nothing lingers. Tunable via `WC_KILL_RSS_MB`, `WC_GUARD_WINDOW_S`, `WC_MAX_TRIES`.
 
 ## License
 
-The shims, layer, patches, and launchers here are MIT. World Creator, the .NET runtime, and nvidia-libs are separate works under their own licenses.
+The patches and launchers here are MIT. World Creator, the .NET runtime, and nvidia-libs are separate works under their own licenses.

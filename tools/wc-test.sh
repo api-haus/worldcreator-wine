@@ -8,7 +8,6 @@
 #   --dir NAME       install dir under the wineprefix's "Program Files"
 #   --portable PATH  absolute path to a portable WC dir (overrides --dir)
 #   --bridge         load the nvcuda CUDA bridge (the GPU-denoise path)
-#   --heapcap        enable the vkheapcap Vulkan layer
 #   --mode MODE      loop (default): classify N boots; persist: one boot, hold open for login
 #   -n N             boots in loop mode (default 8)
 #   --kill MB        RSS kill ceiling (default 14000 loop / 28000 persist)
@@ -16,19 +15,18 @@
 #   --window S       clean-classify window, loop mode (default 22)
 #   --label TXT      label in output
 #
-# Always: WINEPREFIX = the repo prefix; DOTNET_ROLL_FORWARD=LatestMajor; no memcap;
-# each boot is reaped with wineserver -k (never -k9); reaps on exit.
+# Always: WINEPREFIX = the repo prefix; explicit in-prefix DOTNET_ROOT; each boot is
+# reaped with wineserver -k (never -k9); reaps on exit.
 set -u
 HERE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 PREFIX="$HERE/wineprefix"
 
-DIR=""; PORTABLE=""; BRIDGE=0; HEAPCAP=0; MODE=loop; N=8; KILL=""; FLOOR=""; WINDOW=22; LABEL=""
+DIR=""; PORTABLE=""; BRIDGE=0; MODE=loop; N=8; KILL=""; FLOOR=""; WINDOW=22; LABEL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2;;
     --portable) PORTABLE="$2"; shift 2;;
     --bridge) BRIDGE=1; shift;;
-    --heapcap) HEAPCAP=1; shift;;
     --mode) MODE="$2"; shift 2;;
     -n) N="$2"; shift 2;;
     --kill) KILL="$2"; shift 2;;
@@ -42,7 +40,7 @@ done
 APP="${PORTABLE:-$PREFIX/drive_c/Program Files/$DIR}"
 [ -x "$APP/WorldCreator.exe" ] || { echo "error: WorldCreator.exe not found at: $APP" >&2; exit 2; }
 [ "$MODE" = persist ] && { KILL="${KILL:-28000}"; FLOOR="${FLOOR:-10000}"; } || { KILL="${KILL:-14000}"; FLOOR="${FLOOR:-12000}"; }
-[ -n "$LABEL" ] || LABEL="$(basename "$APP")$([ $BRIDGE = 1 ] && echo +bridge)$([ $HEAPCAP = 1 ] && echo +heapcap)"
+[ -n "$LABEL" ] || LABEL="$(basename "$APP")$([ $BRIDGE = 1 ] && echo +bridge)"
 
 # Each World Creator generation ships against its own .NET (2025.x = net8,
 # 2026.x = net10); install those runtimes into the prefix rather than forcing
@@ -53,9 +51,8 @@ APP="${PORTABLE:-$PREFIX/drive_c/Program Files/$DIR}"
 # path directly so resolution is deterministic.
 export WINEPREFIX WINEDEBUG=-all EGL_LOG_LEVEL=fatal DOTNET_EnableWriteXorExecute=0
 export DOTNET_ROOT='C:\Program Files\dotnet'
-unset LD_PRELOAD WINEDLLOVERRIDES WINEDLLPATH WC_HEAPCAP_ENABLE VKHEAPCAP_GB VKHEAPCAP_VRAM_GB DOTNET_ROLL_FORWARD
+unset LD_PRELOAD WINEDLLOVERRIDES WINEDLLPATH DOTNET_ROLL_FORWARD
 [ $BRIDGE = 1 ] && { export WINEDLLOVERRIDES="nvcuda=b" WINEDLLPATH="$HERE/nvlibs-build/lib/wine"; }
-[ $HEAPCAP = 1 ] && { export WC_HEAPCAP_ENABLE=1 VKHEAPCAP_GB=4 VKHEAPCAP_VRAM_GB=8; }
 
 reap() { local p; for p in $(pgrep -f 'WorldCreator.exe'); do kill -9 "$p" 2>/dev/null; done; wineserver -k 2>/dev/null; wineserver -w 2>/dev/null; }
 trap reap EXIT INT TERM
@@ -82,7 +79,7 @@ sample_boot() {
 }
 
 reap
-echo "### $LABEL  (mode=$MODE bridge=$BRIDGE heapcap=$HEAPCAP kill=${KILL}MB)"
+echo "### $LABEL  (mode=$MODE bridge=$BRIDGE kill=${KILL}MB)"
 
 if [ "$MODE" = persist ]; then
   echo "launching for interactive login; safety kill at ${KILL}MB / avail<${FLOOR}MB. Ctrl-C to stop."

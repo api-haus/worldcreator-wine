@@ -9,7 +9,7 @@
 #   ./wc /abs/path/to/portable              # absolute dir also accepted
 #
 # Env knobs: WC_MAX_TRIES, WC_GUARD_WINDOW_S, WC_KILL_RSS_MB, WC_KILL_FLOOR_MB,
-# WC_GUARD=0|1 (force the guard off/on), VKHEAPCAP_GB, VKHEAPCAP_VRAM_GB.
+# WC_GUARD=0|1 (force the guard off/on).
 set -u
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 
@@ -32,7 +32,6 @@ export WINEPREFIX="$PREFIX" WINEDEBUG=-all EGL_LOG_LEVEL=fatal DOTNET_EnableWrit
 export DOTNET_ROOT='C:\Program Files\dotnet'
 if [ "$DENOISE" = 1 ]; then
   export WINEDLLOVERRIDES="nvcuda=b" WINEDLLPATH="$HERE/nvlibs-build/lib/wine"
-  export WC_HEAPCAP_ENABLE=1 VKHEAPCAP_GB="${VKHEAPCAP_GB:-4}" VKHEAPCAP_VRAM_GB="${VKHEAPCAP_VRAM_GB:-8}"
 fi
 
 # 2025.1 is the only version that never runs away; everything else (2025.2+, 2026.x)
