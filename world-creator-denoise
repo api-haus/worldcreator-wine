@@ -1,0 +1,100 @@
+#!/bin/bash
+# World Creator with the GPU (CUDA/OIDN) denoiser on NVIDIA, for the versions that
+# carry the startup memory runaway (2025.2 and later, including 2026.x).
+#
+# The runaway is a World Creator startup defect introduced in 2025.2 (2025.1 is the
+# last clean version): a few seconds into boot the process sometimes commits host
+# memory at ~2.5GB/s toward tens of GB and never settles. It is bimodal — the same
+# build boots clean ~40-70% of the time, with no relation to user action — and is
+# not the wine version, swap, the CUDA bridge, or any memory cap (see README).
+#
+# This launcher does not prevent it; it works around it by auto-relaunching: it
+# guards the startup window with a hard RSS kill-switch, kills a filling boot
+# before it can starve the host, and relaunches until one lands clean (usually one
+# or two tries). Once clean the guard disarms; on exit it reaps its whole wine
+# session. For a runaway-free denoiser, use World Creator 2025.1 instead.
+#
+# Requires: nvcuda=b + WINEDLLPATH (CUDA bridge); the patched Veldrid.dll; the OIDN
+# CUDA backend present; octane.dll moved aside. (memcap is loaded but does not
+# affect the runaway.)
+HERE=$(dirname "$(readlink -f "$0")")
+
+export WINEPREFIX="$HERE/wineprefix"
+export WINEDEBUG=-all
+export EGL_LOG_LEVEL=fatal
+export DOTNET_EnableWriteXorExecute=0
+export MEMCAP_GB="${MEMCAP_GB:-24}"
+export WINEDLLOVERRIDES="nvcuda=b"
+export WINEDLLPATH="$HERE/nvlibs-build/lib/wine"
+export WC_HEAPCAP_ENABLE=1
+export VKHEAPCAP_GB="${VKHEAPCAP_GB:-4}"
+export VKHEAPCAP_VRAM_GB="${VKHEAPCAP_VRAM_GB:-8}"
+unset DOTNET_ROOT
+
+KILL_RSS_MB="${WC_KILL_RSS_MB:-5000}"      # clean boots peak <4GB; runaway blows past in <1s
+FLOOR_MB="${WC_KILL_FLOOR_MB:-12000}"
+GUARD_WINDOW_S="${WC_GUARD_WINDOW_S:-25}"  # runaway fires ~11s; 25s confirms clean
+MAX_TRIES="${WC_MAX_TRIES:-10}"
+LOG="$HERE/world-creator-denoise.log"
+APP="$WINEPREFIX/drive_c/Program Files/World Creator 2026.4"
+
+# memcap is loaded only into the wine child (below), never into this script.
+MEMCAP_SO="$HERE/memcap.so"
+
+# Reap the whole wine session for THIS prefix. wineserver -k gracefully terminates
+# every process in the session — WorldCreator.exe plus explorer/services/svchost/
+# rpcss/plugplay — and -w waits for them to exit; -k9 instead SIGKILLs the server
+# and orphans those, so they pile up across relaunches (hundreds of stray .exe).
+# It is scoped to WINEPREFIX, so it never touches another wine prefix.
+kill_session() {
+  wineserver -k 2>/dev/null
+  wineserver -w 2>/dev/null
+}
+# Reap on ANY exit — clean quit, relaunch, Ctrl-C, or kill — so closing the
+# launcher leaves no lingering wine processes behind.
+trap kill_session EXIT
+trap 'exit 130' INT TERM
+
+cd "$APP" || exit 1
+
+try=0
+while [ "$try" -lt "$MAX_TRIES" ]; do
+  try=$((try + 1))
+  ( exec env LD_PRELOAD="$MEMCAP_SO" wine WorldCreator.exe "$@" ) > "$LOG" 2>&1 &
+  wpid=$!
+
+  appeared=0; elapsed_ms=0; verdict="running"
+  while :; do
+    sleep 0.3
+    pids=$(pgrep -f 'WorldCreator.exe')
+    if [ -z "$pids" ]; then
+      if [ "$appeared" = 1 ]; then verdict="exited"; break; fi
+      kill -0 "$wpid" 2>/dev/null || { verdict="exited"; break; }
+      continue
+    fi
+    appeared=1; elapsed_ms=$((elapsed_ms + 300))
+    rss=0
+    for p in $pids; do
+      v=$(awk '/^VmRSS:/{print $2}' "/proc/$p/status" 2>/dev/null)
+      [ -n "$v" ] && rss=$((rss + v / 1024))
+    done
+    avail=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo)
+    if [ "$rss" -gt "$KILL_RSS_MB" ] || [ "$avail" -lt "$FLOOR_MB" ]; then
+      verdict="runaway"; break
+    fi
+    [ "$elapsed_ms" -ge "$((GUARD_WINDOW_S * 1000))" ] && { verdict="clean"; break; }
+  done
+
+  if [ "$verdict" = "clean" ]; then
+    echo "[world-creator-denoise] clean boot (try $try) — running." >&2
+    wait "$wpid"
+    exit $?
+  fi
+  echo "[world-creator-denoise] startup $verdict (try $try, RSS=${rss:-0}MB) — killed; relaunching." >&2
+  [ -n "$pids" ] && kill -9 $pids 2>/dev/null   # stop the storming app at once (memory safety)
+  kill "$wpid" 2>/dev/null
+  kill_session
+done
+
+echo "[world-creator-denoise] no clean boot in $MAX_TRIES tries — rerun." >&2
+exit 1

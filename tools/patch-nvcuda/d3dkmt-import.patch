@@ -1,0 +1,60 @@
+diff --git a/dlls/nvcuda/internal.c b/dlls/nvcuda/internal.c
+index a5b8685..625fc86 100644
+--- a/dlls/nvcuda/internal.c
++++ b/dlls/nvcuda/internal.c
+@@ -127,10 +127,43 @@ int get_shared_resource_fd(HANDLE win32_handle)
+        return -1;
+     }
+ 
++    /* Upstream Wine exports Vulkan external memory as a D3DKMT shared resource,
++     * not via Proton's IOCTL_SHARED_GPU_RESOURCE device (the fallback below,
++     * which fails here). Open it by its shared NT handle and take its fd, as
++     * win32u's d3dkmt_open_resource + d3dkmt_object_get_fd do (win32u/d3dkmt.c). */
++    {
++        obj_handle_t obj_handle = 0;
++
++        SERVER_START_REQ( d3dkmt_object_open )
++        {
++            req->type   = D3DKMT_RESOURCE;
++            req->global = 0;
++            req->handle = wine_server_obj_handle( new_handle );
++            status = wine_server_call( req );
++            obj_handle = reply->handle;
++        }
++        SERVER_END_REQ;
++
++        if (!status)
++        {
++            status = wine_server_handle_to_fd(wine_server_ptr_handle(obj_handle), GENERIC_ALL, &unix_fd, NULL);
++            NtClose(wine_server_ptr_handle(obj_handle));
++            if (status == STATUS_SUCCESS && unix_fd >= 0)
++            {
++                NtClose(new_handle);
++                return unix_fd;
++            }
++            ERR("d3dkmt resource fd conversion failed for handle %p - Status: 0x%x\n", win32_handle, (unsigned int)status);
++            unix_fd = -1;
++        }
++        else WARN("d3dkmt_object_open did not claim handle %p (0x%x); trying IOCTL fallback\n", win32_handle, (unsigned int)status);
++    }
++
+     if (NtDeviceIoControlFile(new_handle, NULL, NULL, NULL, &iosb, IOCTL_SHARED_GPU_RESOURCE_GET_UNIX_RESOURCE,
+                               NULL, 0, &unix_resource, sizeof(unix_resource)))
+     {
+         ERR("NtDeviceIoControlFile failed for handle %p\n", new_handle);
++        NtClose(new_handle);
+         return -1;
+     }
+ 
+@@ -138,9 +171,11 @@ int get_shared_resource_fd(HANDLE win32_handle)
+     if (status != STATUS_SUCCESS || unix_fd < 0)
+     {
+         ERR("Failed to convert Unix resource to FD for handle %p - Status: 0x%x\n", win32_handle, status);
++        NtClose(new_handle);
+         return -1;
+     }
+     NtClose(wine_server_ptr_handle(unix_resource));
++    NtClose(new_handle);
+ 
+     return unix_fd;
+ }

@@ -81,42 +81,54 @@ static int capped_meminfo_fd(void) {
 
 static int is_meminfo(const char *p) { return p && strcmp(p, "/proc/meminfo") == 0; }
 
-/* Optional ceiling on committed anonymous memory. World Creator's CUDA path
- * fills host RAM in a loop until an allocation fails; with MEMCAP_MMAP_GB set,
- * large writable anonymous mmaps past the cumulative cap return MAP_FAILED so
- * the loop hits an error it can handle, instead of the kernel OOM-killing the
- * process. Reservations (PROT_NONE) are not counted — .NET reserves huge
- * address space up front. */
 #include <sys/mman.h>
 #include <errno.h>
 #include <stdatomic.h>
 
-/* One ceiling shared by both ways memory is committed under Wine: a writable
- * anonymous mmap, and an mprotect that adds PROT_WRITE to a previously-reserved
- * (PROT_NONE) region — Wine's VirtualAlloc(MEM_COMMIT) takes the latter path.
- * Only large requests count, so the .NET JIT's and GC's small/early commits
- * pass; the application's bulk fill is what crosses the cap. MEMCAP_COMMIT_GB
- * (or the older MEMCAP_MMAP_GB) sets it; unset means no ceiling. */
+/* Optional cumulative ceiling on large (>=8MB) writable commits — anonymous
+ * mmap, or mprotect adding PROT_WRITE (Wine's VirtualAlloc(MEM_COMMIT)).
+ * MEMCAP_COMMIT_GB/MEMCAP_MMAP_GB set it; off by default. Cumulative, not
+ * current, so it false-trips over a long session; did not bound the runaway. */
 static atomic_long g_committed = 0;
 static long commit_cap(void) {
     const char *e = getenv("MEMCAP_COMMIT_GB");
     if (!e) e = getenv("MEMCAP_MMAP_GB");
     return e ? strtol(e, 0, 10) * 1024L * 1024L * 1024L : 0;
 }
+
 static int over_cap(size_t len) {
     long cap = commit_cap();
     if (!cap) return 0;
     if (atomic_fetch_add(&g_committed, (long)len) + (long)len > cap) {
         atomic_fetch_sub(&g_committed, (long)len);
+        /* MEMCAP_DEBUG: log rejections via raw write(2) (no allocator re-entry). */
+        if (getenv("MEMCAP_DEBUG")) {
+            char b[160];
+            int n = snprintf(b, sizeof b,
+                "[memcap] commit ceiling hit: req=%zuMB committed=%ldMB cap=%ldMB -> ENOMEM\n",
+                len >> 20, (long)(atomic_load(&g_committed) >> 20), cap >> 20);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
         errno = ENOMEM;
         return 1;
     }
     return 0;
 }
 
+/* MEMCAP_TRACE: log each writable commit >=1MB (size, flags, fd, anon) via raw
+ * write(2), for diagnosing the runaway's allocation path. */
+static void trace_commit(const char *what, size_t len, int prot, int flags, int fd) {
+    if (len < (1UL << 20) || !getenv("MEMCAP_TRACE")) return;
+    char b[200];
+    int n = snprintf(b, sizeof b, "[memcap-trace] %s len=%zuMB prot=0x%x flags=0x%x fd=%d anon=%d\n",
+                     what, len >> 20, prot, flags, fd, (flags & MAP_ANONYMOUS) ? 1 : 0);
+    if (n > 0) (void)write(2, b, (size_t)n);
+}
+
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
     static void *(*real)(void *, size_t, int, int, int, off_t) = 0;
     if (!real) real = dlsym(RTLD_NEXT, "mmap");
+    if (prot & PROT_WRITE) trace_commit("mmap", len, prot, flags, fd);
     if ((flags & MAP_ANONYMOUS) && (prot & PROT_WRITE) && len >= (8UL << 20) && over_cap(len))
         return MAP_FAILED;
     return real(addr, len, prot, flags, fd, off);
@@ -125,6 +137,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
 int mprotect(void *addr, size_t len, int prot) {
     static int (*real)(void *, size_t, int) = 0;
     if (!real) real = dlsym(RTLD_NEXT, "mprotect");
+    if (prot & PROT_WRITE) trace_commit("mprotect", len, prot, 0, -1);
     if ((prot & PROT_WRITE) && len >= (8UL << 20) && over_cap(len))
         return -1;
     return real(addr, len, prot);
