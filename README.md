@@ -15,7 +15,7 @@ Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and 
 
 ## Setup
 
-`install-wc.sh` does everything — creates the prefix, installs the prefix deps (`vcrun2022`, `dxvk`, fonts), builds and patches the `nvcuda` bridge, ensures the right .NET runtime, installs the version, and patches it. Idempotent; install versions side by side:
+`install-wc.sh` does everything — creates the prefix, installs the prefix deps (`vcrun2022` + fonts), builds and patches the `nvcuda` bridge, ensures the right .NET runtime, installs the version, and patches it. Idempotent; install versions side by side:
 
 ```
 ./install-wc.sh --msi /path/to/WorldCreator_2026_4.msi          # from an MSI
@@ -45,7 +45,9 @@ Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and 
 The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `install-wc.sh` assembles the pieces it requires, and `wc` (incl. `world-creator-denoise`) enables them.
 
 - **`nvcuda.dll` in the prefix `system32`** — OIDN's CUDA backend does `LoadLibrary("nvcuda.dll")`, and the `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH` the launcher sets are **not** enough on their own: the bridge's PE half must be visible in the prefix's `system32`, or the denoiser toggles on and silently does nothing. `install-wc.sh` symlinks it (`…/nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll`).
-- **Prefix runtime deps (`vcrun2022` + `dxvk`)** — GPU denoise needs the MSVC runtime the native OIDN DLLs link against and the DXVK D3D→Vulkan path. Without them the denoiser toggles on but produces **no output** (and dropping an OIDN `_device_cpu.dll` in alongside makes it render **black** instead — that CPU backend is a dead end, it never denoises). `install-wc.sh` installs both; skipping them is the usual cause of "denoiser does nothing."
+- **`vcrun2022` (MSVC runtime) — required to launch.** `WorldCreator.exe`'s native libraries link the Microsoft Visual C++ runtime; without it the .NET app won't start at all (coreclr/`libicuuc` load failure). `install-wc.sh` installs it. (An OIDN `_device_cpu.dll` is a dead end — it never denoises, only renders **black** — so don't add one.)
+
+**DXVK is not needed** — World Creator is Vulkan-native (Veldrid → winevulkan), so nothing translates D3D. Leave-one-out on 2025.1 (deterministic) confirms the **minimal denoise set**: the Veldrid patch, the D3DKMT bridge patch, the nvcuda bridge + `system32` symlink, and `vcrun2022` — removing any one breaks denoise (crash / black / black / no-launch); DXVK, fonts, and vkheapcap do not.
 
 - **nvcuda bridge** — built from [nvidia-libs](https://github.com/SveSop/nvidia-libs), forwarding the CUDA Driver API to host `libcuda.so`. It loads as a builtin split DLL via `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH`.
 - **Bridge patch (`tools/patch-nvcuda/`)** — OIDN imports the Vulkan buffers via `cuImportExternalMemory` (`OPAQUE_WIN32`). The stock bridge resolves the handle through Proton's `IOCTL_SHARED_GPU_RESOURCE` device, absent in Wine 11.11, so the import fails and denoise renders black. The patch opens the handle's D3DKMT shared resource instead, the way win32u does.
@@ -77,4 +79,4 @@ The diverging factor between a clean and a runaway boot is internal timing in Wo
 
 ## License
 
-The shims, layer, patches, and launchers here are MIT. World Creator, the .NET runtime, DXVK, and nvidia-libs are separate works under their own licenses.
+The shims, layer, patches, and launchers here are MIT. World Creator, the .NET runtime, and nvidia-libs are separate works under their own licenses.

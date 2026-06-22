@@ -51,10 +51,14 @@ ensure_dotnet() {       # $1 = major (8|10); install the Desktop Runtime if abse
 }
 
 setup_prefix_wide() {   # everything shared by all versions; all steps idempotent
+  # vcrun2022 is required — the .NET app's native libs need the MSVC runtime, without
+  # it WorldCreator.exe won't start. NOT DXVK: World Creator renders in Vulkan directly
+  # (Veldrid->winevulkan), so there is no D3D path to translate (ablation-proven).
+  # corefonts/fontsmooth are cosmetic only.
   if command -v winetricks >/dev/null; then
-    echo "[deps] vcrun2022 + dxvk + corefonts + fontsmooth"
-    winetricks -q vcrun2022 dxvk corefonts fontsmooth=rgb
-  else echo "  WARNING: winetricks not found — denoise needs vcrun2022 + dxvk"; fi
+    echo "[deps] vcrun2022 + corefonts + fontsmooth"
+    winetricks -q vcrun2022 corefonts fontsmooth=rgb
+  else echo "  WARNING: winetricks not found — install vcrun2022 or WorldCreator.exe won't start"; fi
 
   if [ -f /usr/include/vulkan/vk_layer.h ]; then
     gcc -O2 -fPIC -shared -o "$HERE/vkheapcap.so" "$HERE/vkheapcap.c"
