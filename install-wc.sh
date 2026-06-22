@@ -112,6 +112,10 @@ EOF
   update-desktop-database "$apps" 2>/dev/null || true
   printf '#!/usr/bin/env bash\nexec "%s/wc" "%s" --prefix "%s" "$@"\n' "$HERE" "$name" "$PREFIX" > "$bin/wc-${VER}"
   chmod +x "$bin/wc-${VER}"
+  # drop wine's MSI-generated menu entry for this version — it launches with the wrong
+  # env (no DOTNET_ROOT/bridge/guard) and would just shadow ours.
+  rm -rf "$apps"/wine/Programs/*"${VER}"*.desktop "$apps"/wine/Programs/*"${VER}" 2>/dev/null || true
+  update-desktop-database "$apps" 2>/dev/null || true
   echo "  launchers: app-menu 'World Creator ${VER}' + CLI 'wc-${VER}'"
 }
 
