@@ -15,15 +15,13 @@
 # session. For a runaway-free denoiser, use World Creator 2025.1 instead.
 #
 # Requires: nvcuda=b + WINEDLLPATH (CUDA bridge); the patched Veldrid.dll; the OIDN
-# CUDA backend present; octane.dll moved aside. (memcap is loaded but does not
-# affect the runaway.)
+# CUDA backend present; octane.dll moved aside.
 HERE=$(dirname "$(readlink -f "$0")")
 
 export WINEPREFIX="$HERE/wineprefix"
 export WINEDEBUG=-all
 export EGL_LOG_LEVEL=fatal
 export DOTNET_EnableWriteXorExecute=0
-export MEMCAP_GB="${MEMCAP_GB:-24}"
 export WINEDLLOVERRIDES="nvcuda=b"
 export WINEDLLPATH="$HERE/nvlibs-build/lib/wine"
 export WC_HEAPCAP_ENABLE=1
@@ -37,9 +35,6 @@ GUARD_WINDOW_S="${WC_GUARD_WINDOW_S:-25}"  # runaway fires ~11s; 25s confirms cl
 MAX_TRIES="${WC_MAX_TRIES:-10}"
 LOG="$HERE/world-creator-denoise.log"
 APP="$WINEPREFIX/drive_c/Program Files/World Creator 2026.4"
-
-# memcap is loaded only into the wine child (below), never into this script.
-MEMCAP_SO="$HERE/memcap.so"
 
 # Reap the whole wine session for THIS prefix. wineserver -k gracefully terminates
 # every process in the session — WorldCreator.exe plus explorer/services/svchost/
@@ -60,7 +55,7 @@ cd "$APP" || exit 1
 try=0
 while [ "$try" -lt "$MAX_TRIES" ]; do
   try=$((try + 1))
-  ( exec env LD_PRELOAD="$MEMCAP_SO" wine WorldCreator.exe "$@" ) > "$LOG" 2>&1 &
+  ( exec wine WorldCreator.exe "$@" ) > "$LOG" 2>&1 &
   wpid=$!
 
   appeared=0; elapsed_ms=0; verdict="running"

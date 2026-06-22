@@ -1,19 +1,15 @@
 #!/bin/sh
-# World Creator 2026.4 under wine, baseline: no CUDA bridge, so no GPU denoiser
-# and no startup RAM runaway. For the GPU denoiser use ./world-creator-denoise.
-#
-# memcap.so caps the total-memory value wine derives from sysinfo(); without it
-# World Creator sizes a startup pool to wine's reported RAM+swap and exhausts
-# memory. DOTNET_EnableWriteXorExecute=0 avoids the .NET 10 JIT tripping over
-# wine's W^X page handling.
+# World Creator 2026.4 under wine, baseline: no CUDA bridge, so no GPU denoiser.
+# This has no runaway guard, so on a version with the startup memory runaway
+# (2025.2 and later) it can fill RAM — use ./world-creator-denoise (which guards
+# and relaunches) for those, or run World Creator 2025.1, the last clean version.
+# DOTNET_EnableWriteXorExecute=0 avoids the .NET 10 JIT tripping over wine's W^X.
 HERE=$(dirname "$(readlink -f "$0")")
 
 export WINEPREFIX="$HERE/wineprefix"
 export WINEDEBUG=-all
 export EGL_LOG_LEVEL=fatal
 export DOTNET_EnableWriteXorExecute=0
-export MEMCAP_GB="${MEMCAP_GB:-24}"
-export LD_PRELOAD="$HERE/memcap.so"
 unset DOTNET_ROOT
 
 exec wine "$WINEPREFIX/drive_c/Program Files/World Creator 2026.4/WorldCreator.exe" "$@"

@@ -1,21 +1,16 @@
 # World Creator 2026.4 on Linux (Wine)
 
-Launchers and an `LD_PRELOAD` memory shim that run BiteTheBytes' World Creator 2026.4 — a Windows .NET 10 desktop application with a Veldrid/Vulkan renderer — under Wine on Linux, including the GPU (CUDA/OIDN) viewport denoiser on NVIDIA. World Creator itself is not included; install it from your own licensed copy.
+Launchers and patches that run BiteTheBytes' World Creator — a Windows .NET desktop application with a Veldrid/Vulkan renderer — under Wine on Linux, including the GPU (CUDA/OIDN) viewport denoiser on NVIDIA. World Creator itself is not included; install it from your own licensed copy.
 
 Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and .NET 10.0.8.
 
 ## What's here
 
-- `memcap.c` — the `LD_PRELOAD` memory shim that caps the RAM figure Wine reports, the load-bearing fix for the base port.
-- `vkheapcap.c` + `wc_heapcap.json.in` — a Vulkan layer that caps the reported host-visible heap size, for the GPU-denoise path.
 - `tools/patch-nvcuda/`, `tools/patch-veldrid/` — the two source patches the GPU denoiser needs (below).
-- `build.sh` — builds the shim and layer, builds and patches the `nvcuda` bridge, and applies the install patches.
+- `vkheapcap.c` + `wc_heapcap.json.in` — a Vulkan layer that caps the reported host-visible heap size.
+- `build.sh` — builds the layer, builds and patches the `nvcuda` bridge, and applies the install patches.
 - `world-creator` — baseline launcher (no CUDA bridge, no GPU denoiser).
 - `world-creator-denoise` — GPU-denoise launcher with the boot guard (below).
-
-## Why the shim is needed
-
-World Creator sizes a native startup buffer to the system's memory. Wine derives `GlobalMemoryStatusEx` from `sysinfo()` and `/proc/meminfo`, so on a host with large swap the reported total is RAM+swap (a 165 GB commit limit on the test machine), and the application tries to commit most of it and dies thrashing. `memcap.so` intercepts `sysinfo()` and caps `totalram`/`freeram` while zeroing swap, so the application sizes a buffer that fits. `MEMCAP_GB` (default 24) sets the cap.
 
 ## Setup
 
@@ -37,7 +32,7 @@ World Creator sizes a native startup buffer to the system's memory. Wine derives
    ```
    The silent MSI skips its bundled prerequisites, and the bundled .NET is 9 where the application needs 10, so install the dependencies in step 2 regardless.
 
-4. Build the shims, bridge, and patches:
+4. Build the layer, bridge, and patches:
    ```
    ./build.sh
    ```
@@ -48,13 +43,12 @@ World Creator sizes a native startup buffer to the system's memory. Wine derives
    ./world-creator           # no denoiser
    ```
 
-The launchers resolve their own directory; keep them next to `wineprefix/`, `memcap.so`, and `nvlibs-build/`.
+The launchers resolve their own directory; keep them next to `wineprefix/` and `nvlibs-build/`.
 
 ## Gotchas
 
 - **`DOTNET_ROOT` leaks into Wine.** If the host sets `DOTNET_ROOT` for a Linux dotnet install, the Windows apphost follows it to `Z:\usr\share\dotnet` and fails with a missing `hostfxr.dll`. The launchers `unset DOTNET_ROOT`.
 - **`mscoree` must stay builtin at run time.** Disabling it to skip the Mono prompt during init is fine, but an `mscoree=d` override while running makes the CoreCLR managed assemblies fail to load with a misleading "Module not found".
-- **Do not fake `/proc/meminfo` with a constant.** `memcap.c` can also rewrite `/proc/meminfo`, gated behind `MEMCAP_MEMINFO`; leave it off. The application allocates in a loop until reported free memory drops, so a constant `MemAvailable` makes that loop never terminate. Capping `sysinfo()` alone is correct.
 - **EGL warning spam.** The NVIDIA EGL driver prints `failed to create dri2 screen` repeatedly. It is harmless, but piping it to a terminal that cannot drain it fast enough blocks the application's stdout and hangs it at the splash. The launchers log to a file and set `EGL_LOG_LEVEL=fatal`.
 
 ## GPU denoise
@@ -80,7 +74,7 @@ A version bisect places the regression precisely: **2025.1 never runs away; 2025
 - **Not swap or the reported pagefile** — disabling swap does not help; the runaway still claims host memory.
 - **Not the GPU-denoise / CUDA path** — the baseline renderer with no `nvcuda` bridge loaded runs away too; the bridge is not required to trigger it.
 - **Not the .NET runtime** — 2025.1 and 2025.6 are both `net8` and both run on the same installed runtime via roll-forward, yet one is clean and the other is not.
-- **Not boundable by a memory cap** — `memcap` caps the `sysinfo` figure, which World Creator does not size to; capping `/proc/meminfo` instead makes its allocate-until-free-memory-drops loop never terminate. No in-process cap bounds it without corrupting the process, and no external lever (CPU affinity, in-process GPU pre-warm, memory caps) makes a boot deterministically clean.
+- **Not boundable by faking the reported memory** — capping the `sysinfo` figure has no effect (World Creator does not size its allocation to it), and capping `/proc/meminfo` instead makes its allocate-until-free-memory-drops loop never terminate. No in-process cap bounds it without corrupting the process, and no external lever (CPU affinity, in-process GPU pre-warm, memory caps) makes a boot deterministically clean. (An earlier `memcap` `LD_PRELOAD` shim that capped `sysinfo` was removed once testing showed it changed nothing.)
 
 The diverging factor between a clean and a runaway boot is internal timing in World Creator's (obfuscated) startup, not any value the environment can set — which is why it presents as random and cannot be fixed from outside the application.
 
