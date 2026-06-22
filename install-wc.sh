@@ -12,8 +12,8 @@
 #   --net 8|10        .NET runtime to ensure (default: auto — 2024/2025.x=8, else 10)
 #   --prefix DIR      WINEPREFIX (default: ./wineprefix)
 #
-# .NET runtimes are found in $WC_DOTNET_DIR (default /mnt/archive4/Downloads) as
-# windowsdesktop-runtime-<major>*-win-x64.exe; override the dir or pre-install them.
+# .NET runtimes are found in $WC_DOTNET_DIR (default: this repo dir) as
+# windowsdesktop-runtime-<major>-x64.exe; override the dir or pre-install them.
 # Launch an installed version with ./wc "World Creator <ver>".
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -41,8 +41,8 @@ echo "== World Creator install: version=${VER} net=${NET} prefix=${PREFIX} =="
 ensure_dotnet() {       # $1 = major (8|10); install the Desktop Runtime if absent
   local maj="$1" shared="$PREFIX/drive_c/Program Files/dotnet/shared/Microsoft.WindowsDesktop.App"
   if ls "$shared" 2>/dev/null | grep -q "^${maj}\."; then echo "[dotnet] net${maj} present"; return; fi
-  local dir="${WC_DOTNET_DIR:-/mnt/archive4/Downloads}" exe
-  exe=$(ls "$dir"/windowsdesktop-runtime-"${maj}"*-win-x64.exe 2>/dev/null | sort -V | tail -1 || true)
+  local dir="${WC_DOTNET_DIR:-$HERE}" exe
+  exe=$(ls "$dir"/windowsdesktop-runtime-"${maj}"[.-]*x64.exe 2>/dev/null | sort -V | tail -1 || true)
   [ -n "$exe" ] || { echo "error: .NET ${maj} Desktop Runtime missing and no installer in ${dir}" >&2
     echo "       put windowsdesktop-runtime-${maj}-x64.exe there or set WC_DOTNET_DIR" >&2; exit 1; }
   echo "[dotnet] installing net${maj} from $(basename "$exe")"

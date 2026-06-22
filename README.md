@@ -22,7 +22,7 @@ Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and 
 ./install-wc.sh --portable /path/to/WorldCreator_2025_1_BETA    # existing/portable dir, patched in place
 ```
 
-.NET is auto-selected (2024/2025.x → net8, else net10) from `$WC_DOTNET_DIR` (default `/mnt/archive4/Downloads`, `windowsdesktop-runtime-<major>-win-x64.exe`); override with `--net` or the dir. Then:
+.NET is auto-selected (2024/2025.x → net8, else net10) and installed from `$WC_DOTNET_DIR` (default: the repo dir; drop `windowsdesktop-runtime-<major>-x64.exe` there); override with `--net` or the dir. Then:
 
 ```
 ./wc "World Creator 2026.4"               # GPU denoiser + runaway guard
