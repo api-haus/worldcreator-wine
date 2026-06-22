@@ -1,18 +1,5 @@
-#!/bin/sh
-# World Creator 2026.4 under wine, baseline: no CUDA bridge, so no GPU denoiser.
-# This has no runaway guard, so on a version with the startup memory runaway
-# (2025.2 and later) it can fill RAM — use ./world-creator-denoise (which guards
-# and relaunches) for those, or run World Creator 2025.1, the last clean version.
-# DOTNET_EnableWriteXorExecute=0 avoids the .NET 10 JIT tripping over wine's W^X.
-HERE=$(dirname "$(readlink -f "$0")")
-
-export WINEPREFIX="$HERE/wineprefix"
-export WINEDEBUG=-all
-export EGL_LOG_LEVEL=fatal
-export DOTNET_EnableWriteXorExecute=0
-# Force the apphost to the in-prefix Windows runtime. A host DOTNET_ROOT (e.g.
-# /usr/share/dotnet) leaks into wine and resolves to Z:\usr\share\dotnet (Linux
-# binaries) -> "must install .NET Desktop Runtime"; this explicit Windows path wins.
-export DOTNET_ROOT='C:\Program Files\dotnet'
-
-exec wine "$WINEPREFIX/drive_c/Program Files/World Creator 2026.4/WorldCreator.exe" "$@"
+#!/usr/bin/env bash
+# Baseline launcher (no GPU denoiser) for World Creator 2026.4 — thin wrapper over ./wc.
+# For another version use ./wc "World Creator <ver>" --no-denoise directly.
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+exec "$HERE/wc" "World Creator 2026.4" --no-denoise "$@"

@@ -1,4 +1,4 @@
-# World Creator 2026.4 on Linux (Wine)
+# World Creator on Linux (Wine)
 
 Launchers and patches that run BiteTheBytes' World Creator — a Windows .NET desktop application with a Veldrid/Vulkan renderer — under Wine on Linux, including the GPU (CUDA/OIDN) viewport denoiser on NVIDIA. World Creator itself is not included; install it from your own licensed copy.
 
@@ -6,44 +6,33 @@ Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and 
 
 ## What's here
 
+- `install-wc.sh` — installs and patches **any** World Creator version into a shared prefix (prefix deps, .NET runtime, nvcuda bridge, Veldrid/octane patches). Idempotent; versions coexist.
+- `wc` — generic launcher: GPU denoise env + the startup-runaway guard, for any installed version.
+- `world-creator` / `world-creator-denoise` — back-compat 2026.4 shortcuts over `wc` (baseline / GPU denoise).
+- `build.sh` — back-compat shim: prefix setup + patch an already-installed 2026.4.
 - `tools/patch-nvcuda/`, `tools/patch-veldrid/` — the two source patches the GPU denoiser needs (below).
 - `vkheapcap.c` + `wc_heapcap.json.in` — a Vulkan layer that caps the reported host-visible heap size.
-- `build.sh` — builds the layer, builds and patches the `nvcuda` bridge, and applies the install patches.
-- `world-creator` — baseline launcher (no CUDA bridge, no GPU denoiser).
-- `world-creator-denoise` — GPU-denoise launcher with the boot guard (below).
 
 ## Setup
 
-1. Create a 64-bit prefix:
-   ```
-   export WINEPREFIX=/path/to/WORLD_CREATOR/wineprefix
-   WINEDLLOVERRIDES="mscoree=d;mshtml=d" wineboot --init
-   ```
-   The overrides only skip the Mono/Gecko prompt during init; they must not persist at run time (see Gotchas).
+`install-wc.sh` does everything — creates the prefix, installs the prefix deps (`vcrun2022`, `dxvk`, fonts), builds and patches the `nvcuda` bridge, ensures the right .NET runtime, installs the version, and patches it. Idempotent; install versions side by side:
 
-2. Install the prefix dependencies:
-   - **.NET 10 Desktop Runtime (x64)** — the application needs `Microsoft.NETCore.App` and `Microsoft.WindowsDesktop.App` 10.0. Run the Windows desktop-runtime installer under `wine` with `/install /quiet /norestart`.
-   - **Visual C++ 2015-2022:** `winetricks -q vcrun2022`.
-   - **DXVK:** `winetricks -q dxvk`.
+```
+./install-wc.sh --msi /path/to/WorldCreator_2026_4.msi          # from an MSI
+./install-wc.sh --portable /path/to/WorldCreator_2025_1_BETA    # existing/portable dir, patched in place
+```
 
-3. Install World Creator into the prefix from your MSI:
-   ```
-   wine msiexec /i 'Z:/path/to/WorldCreator_2026_4.msi' /qn
-   ```
-   The silent MSI skips its bundled prerequisites, and the bundled .NET is 9 where the application needs 10, so install the dependencies in step 2 regardless.
+.NET is auto-selected (2024/2025.x → net8, else net10) from `$WC_DOTNET_DIR` (default `/mnt/archive4/Downloads`, `windowsdesktop-runtime-<major>-win-x64.exe`); override with `--net` or the dir. Then:
 
-4. Build the layer, bridge, and patches:
-   ```
-   ./build.sh
-   ```
+```
+./wc "World Creator 2026.4"               # GPU denoiser + runaway guard
+./wc "World Creator 2026.4" --no-denoise  # baseline
+./wc "World Creator 2025.1"               # any other installed version (2025.1 needs no guard)
+```
 
-5. Run:
-   ```
-   ./world-creator-denoise   # GPU denoiser
-   ./world-creator           # no denoiser
-   ```
+`world-creator-denoise` / `world-creator` stay as 2026.4 shortcuts. The scripts resolve their own directory; keep them next to `wineprefix/` and `nvlibs-build/`.
 
-The launchers resolve their own directory; keep them next to `wineprefix/` and `nvlibs-build/`.
+**Side-by-side .NET caveat:** 2025.x (net8) + 2026.x (net10) in one prefix means both runtimes are installed. Fine on clean installs — the explicit `DOTNET_ROOT` the launcher sets resolves the right framework per `runtimeconfig` — but never hand-edit the `HKLM\SOFTWARE\dotnet` registry tree; a corrupted one is what produces the ".NET Desktop Runtime" dialog (see Gotchas).
 
 ## Gotchas
 
@@ -53,9 +42,10 @@ The launchers resolve their own directory; keep them next to `wineprefix/` and `
 
 ## GPU denoise
 
-The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `build.sh` assembles the pieces it requires, and `world-creator-denoise` enables them.
+The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `install-wc.sh` assembles the pieces it requires, and `wc` (incl. `world-creator-denoise`) enables them.
 
-- **Prefix runtime deps (`vcrun2022` + `dxvk`)** — GPU denoise needs the MSVC runtime the native OIDN DLLs link against and the DXVK D3D→Vulkan path. Without them the denoiser toggles on but produces **no output** (and dropping an OIDN `_device_cpu.dll` in alongside makes it render **black** instead — that CPU backend is a dead end, it never denoises). `build.sh` installs both; skipping them is the usual cause of "denoiser does nothing."
+- **`nvcuda.dll` in the prefix `system32`** — OIDN's CUDA backend does `LoadLibrary("nvcuda.dll")`, and the `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH` the launcher sets are **not** enough on their own: the bridge's PE half must be visible in the prefix's `system32`, or the denoiser toggles on and silently does nothing. `install-wc.sh` symlinks it (`…/nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll`).
+- **Prefix runtime deps (`vcrun2022` + `dxvk`)** — GPU denoise needs the MSVC runtime the native OIDN DLLs link against and the DXVK D3D→Vulkan path. Without them the denoiser toggles on but produces **no output** (and dropping an OIDN `_device_cpu.dll` in alongside makes it render **black** instead — that CPU backend is a dead end, it never denoises). `install-wc.sh` installs both; skipping them is the usual cause of "denoiser does nothing."
 
 - **nvcuda bridge** — built from [nvidia-libs](https://github.com/SveSop/nvidia-libs), forwarding the CUDA Driver API to host `libcuda.so`. It loads as a builtin split DLL via `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH`.
 - **Bridge patch (`tools/patch-nvcuda/`)** — OIDN imports the Vulkan buffers via `cuImportExternalMemory` (`OPAQUE_WIN32`). The stock bridge resolves the handle through Proton's `IOCTL_SHARED_GPU_RESOURCE` device, absent in Wine 11.11, so the import fails and denoise renders black. The patch opens the handle's D3DKMT shared resource instead, the way win32u does.
