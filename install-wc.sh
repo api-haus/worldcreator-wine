@@ -14,16 +14,18 @@
 #
 # .NET runtimes are found in $WC_DOTNET_DIR (default: this repo dir) as
 # windowsdesktop-runtime-<major>-x64.exe; override the dir or pre-install them.
-# Launch an installed version with ./wc "World Creator <ver>".
+# Each install gets an app-menu entry + a 'wc-<ver>' CLI command; --launcher-only
+# (re)creates those for an already-installed version without reinstalling.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-MSI=""; PORTABLE=""; NET=""; PREFIX="$HERE/wineprefix"
+MSI=""; PORTABLE=""; NET=""; PREFIX="$HERE/wineprefix"; LAUNCHER_ONLY=0
 while [ $# -gt 0 ]; do case "$1" in
   --msi) MSI="$2"; shift 2;;
   --portable) PORTABLE="$2"; shift 2;;
   --net) NET="$2"; shift 2;;
   --prefix) PREFIX="$2"; shift 2;;
+  --launcher-only) LAUNCHER_ONLY=1; shift;;
   -h|--help) sed -n '2,18p' "$0"; exit 0;;
   *) echo "unknown arg: $1" >&2; exit 2;;
 esac; done
@@ -90,6 +92,36 @@ setup_prefix_wide() {   # everything shared by all versions; all steps idempoten
   fi
 }
 
+make_launcher() {   # GUI .desktop + CLI wc-<ver>, both pinned to this version's prefix
+  local name="World Creator ${VER}"
+  local apps="$HOME/.local/share/applications" bin="$HOME/.local/bin" icon
+  mkdir -p "$apps" "$bin"
+  icon=$(grep -rhI '^Icon=' "$apps" 2>/dev/null | grep -i creator | head -1 | cut -d= -f2- || true)
+  [ -n "$icon" ] || icon=applications-graphics
+  cat > "$apps/world-creator-${VER}.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=${name}
+Comment=World Creator ${VER} — Wine + GPU denoise
+Exec=${HERE}/wc "${name}" --prefix ${PREFIX}
+Icon=${icon}
+Terminal=false
+Categories=Graphics;3DGraphics;
+StartupWMClass=WorldCreator.exe
+EOF
+  update-desktop-database "$apps" 2>/dev/null || true
+  printf '#!/usr/bin/env bash\nexec "%s/wc" "%s" --prefix "%s" "$@"\n' "$HERE" "$name" "$PREFIX" > "$bin/wc-${VER}"
+  chmod +x "$bin/wc-${VER}"
+  echo "  launchers: app-menu 'World Creator ${VER}' + CLI 'wc-${VER}'"
+}
+
+# launcher-only: just (re)create launchers for an already-installed version
+if [ "$LAUNCHER_ONLY" = 1 ]; then
+  WC_DIR="${PORTABLE:-$PREFIX/drive_c/Program Files/World Creator $VER}"
+  [ -f "$WC_DIR/WorldCreator.exe" ] || { echo "error: WorldCreator.exe not at $WC_DIR" >&2; exit 1; }
+  make_launcher; exit 0
+fi
+
 # 1. prefix
 if [ ! -f "$PREFIX/system.reg" ]; then
   echo "[prefix] creating $PREFIX"
@@ -117,4 +149,7 @@ if [ -f "$WC_DIR/octane.dll" ]; then
   # the Vulkan renderer + OIDN do not need it.
   mv "$WC_DIR/octane.dll" "$WC_DIR/octane.dll.OFF"; echo "  disabled octane.dll"
 fi
-echo "done. launch: ./wc \"$(basename "$WC_DIR")\"   (add --no-denoise to skip the GPU denoiser)"
+# 5. app-menu + CLI launchers
+make_launcher
+echo "done — installed + patched World Creator ${VER}."
+echo "launch: click 'World Creator ${VER}' in your app menu, or run  wc-${VER}   (add --no-denoise to skip the denoiser)"
