@@ -14,12 +14,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WC_DIR="${WC_INSTALL_DIR:-$HERE/wineprefix/drive_c/Program Files/World Creator 2026.4}"
 WINEPREFIX="${WINEPREFIX:-$HERE/wineprefix}"; export WINEPREFIX
 
-echo "[1/4] prefix deps: vcrun2022 + dxvk"
-# GPU denoise needs both: the MSVC runtime (vcrun2022) for the native OIDN DLLs, and
-# DXVK for the D3D->Vulkan path. Without them the denoiser enables but produces no
-# output (and adding an OIDN cpu backend on top renders black). winetricks is idempotent.
+echo "[1/4] prefix deps: vcrun2022 + dxvk + fonts"
+# GPU denoise needs the MSVC runtime (vcrun2022) for the native OIDN DLLs and DXVK for
+# the D3D->Vulkan path; without them the denoiser enables but produces no output.
+# corefonts + fontsmooth=rgb give the UI crisp antialiased text — wine defaults font
+# smoothing off, which leaves the (small) UI labels aliased. winetricks is idempotent.
 if command -v winetricks >/dev/null; then
-  winetricks -q vcrun2022 dxvk
+  winetricks -q vcrun2022 dxvk corefonts fontsmooth=rgb
 else
   echo "  WARNING: winetricks not found — install vcrun2022 + dxvk manually or GPU denoise will not work"
 fi
