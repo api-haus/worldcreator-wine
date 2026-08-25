@@ -32,6 +32,13 @@ export WINEPREFIX="$PREFIX" WINEDEBUG=-all EGL_LOG_LEVEL=fatal DOTNET_EnableWrit
 export DOTNET_ROOT='C:\Program Files\dotnet'
 if [ "$DENOISE" = 1 ]; then
   export WINEDLLOVERRIDES="nvcuda=b" WINEDLLPATH="$HERE/nvlibs-build/lib/wine"
+  # The bridge dlopens libcuda.so.1 by soname. Distros that keep the driver off
+  # the default loader path (NixOS: /run/opengl-driver/lib, and no ld.so.conf)
+  # make that fail, and the only trace is one line — "Wine cannot find the cuda
+  # library, CUDA support is disabled" — behind WINEDEBUG=+nvcuda; the denoise
+  # toggle turns on and does nothing.
+  [ -d /run/opengl-driver/lib ] &&
+    export LD_LIBRARY_PATH="/run/opengl-driver/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
 # 2025.1 is the only version that never runs away; everything else (2025.2+, 2026.x)

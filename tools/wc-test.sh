@@ -52,7 +52,10 @@ APP="${PORTABLE:-$PREFIX/drive_c/Program Files/$DIR}"
 export WINEPREFIX WINEDEBUG=-all EGL_LOG_LEVEL=fatal DOTNET_EnableWriteXorExecute=0
 export DOTNET_ROOT='C:\Program Files\dotnet'
 unset LD_PRELOAD WINEDLLOVERRIDES WINEDLLPATH DOTNET_ROLL_FORWARD
-[ $BRIDGE = 1 ] && { export WINEDLLOVERRIDES="nvcuda=b" WINEDLLPATH="$HERE/nvlibs-build/lib/wine"; }
+# LD_LIBRARY_PATH: see the same guard in ./wc — without it the bridge loads and
+# reports no CUDA, so every --bridge probe is a false negative.
+[ $BRIDGE = 1 ] && { export WINEDLLOVERRIDES="nvcuda=b" WINEDLLPATH="$HERE/nvlibs-build/lib/wine"
+  [ -d /run/opengl-driver/lib ] && export LD_LIBRARY_PATH="/run/opengl-driver/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; }
 
 reap() { local p; for p in $(pgrep -f 'WorldCreator.exe'); do kill -9 "$p" 2>/dev/null; done; wineserver -k 2>/dev/null; wineserver -w 2>/dev/null; }
 trap reap EXIT INT TERM
