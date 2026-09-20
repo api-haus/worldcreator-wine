@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GPU-denoise launcher for World Creator 2026.4 — thin wrapper over ./wc, which carries
-# the denoise env (nvcuda bridge) and the startup-runaway guard. For another version
+# the denoise environment (nvcuda bridge). For another version
 # use ./wc "World Creator <ver>" directly.
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 exec "$HERE/wc" "World Creator 2026.4" "$@"

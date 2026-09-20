@@ -1,81 +1,111 @@
 # World Creator on Linux (Wine)
 
-Launchers and patches that run BiteTheBytes' World Creator — a Windows .NET desktop application with a Veldrid/Vulkan renderer — under Wine on Linux, including the GPU (CUDA/OIDN) viewport denoiser on NVIDIA. World Creator itself is not included; install it from your own licensed copy.
+Launch BiteTheBytes' World Creator on Linux with its Vulkan renderer and NVIDIA
+GPU denoiser. World Creator is proprietary; supply your own licensed installer.
 
-Verified on Wine 11.11, a GeForce RTX 5080 (NVIDIA 610 driver, Vulkan 1.4), and .NET 10.0.9.
+## Requirements
 
-## What's here
+- **Wine 11.17 or newer**, or Wine with [the TTC header fix] backported. Use the
+  complete Wine installation, including its Unix font backend. An app-local
+  `dwrite.dll` with a native override can leave all UI text missing.
+- NVIDIA driver with Vulkan and CUDA support for GPU denoise.
+- `winetricks`, `meson`, `ninja`, a working MinGW-w64 cross compiler, Wine
+  development tools, .NET SDK 10, and Mono's `ikdasm`.
+- Windows .NET Desktop Runtime installers: net8 for World Creator 2024/2025;
+  net10 for 2026. Set `WC_DOTNET_DIR` to their directory.
 
-- `install-wc.sh` — installs and patches **any** World Creator version into a shared prefix (prefix deps, .NET runtime, nvcuda bridge, Veldrid/octane patches). Idempotent; versions coexist.
-- `wc` — generic launcher: GPU denoise env + the startup-runaway guard, for any installed version.
-- `world-creator` / `world-creator-denoise` — back-compat 2026.4 shortcuts over `wc` (baseline / GPU denoise).
-- `build.sh` — back-compat shim: prefix setup + patch an already-installed 2026.4.
-- `tools/patch-nvcuda/`, `tools/patch-veldrid/` — the two source patches the GPU denoiser needs (below).
+Wine through 11.16 could read a bogus font count from a short TTC header,
+allocating until host memory was exhausted during startup. The upstream fix
+corrects that read; memory-report shims and startup retry loops are unnecessary.
 
-## Setup
+## Install and launch
 
-`install-wc.sh` does everything — creates the prefix, installs the prefix deps (`vcrun2022` + fonts), builds and patches the `nvcuda` bridge, ensures the right .NET runtime, installs the version, and patches it. Idempotent; install versions side by side:
+Keep this checkout next to its generated `wineprefix/` and `nvlibs-build/`.
+Versions coexist in the prefix; installation is repeatable.
 
+```sh
+export WC_DOTNET_DIR=/path/to/runtime-installers
+./install-wc.sh --msi /path/to/WorldCreator_2026_4.msi
+wc-2026.4
 ```
-./install-wc.sh --msi /path/to/WorldCreator_2026_4.msi          # from an MSI
-./install-wc.sh --portable /path/to/WorldCreator_2025_1_BETA    # existing/portable dir, patched in place
+
+The installer creates a **World Creator 2026.4** app-menu entry and a
+`~/.local/bin/wc-2026.4` command. Both use the same launcher and prefix.
+It installs `vcrun2022`, fonts, the required .NET runtime, and the denoise patches.
+
+```sh
+./wc "World Creator 2026.4"                 # GPU denoise enabled
+./wc "World Creator 2026.4" --no-denoise    # Vulkan renderer without CUDA
+./wc "World Creator 2025.6"
+./wc "World Creator 2025.1"
 ```
 
-.NET is auto-selected (2024/2025.x → net8, else net10) and installed from `$WC_DOTNET_DIR` (default: the repo dir; drop `windowsdesktop-runtime-<major>-x64.exe` there); override with `--net` or the dir. Then:
+Patch an existing installation or portable directory:
 
-```
-./wc "World Creator 2026.4"               # GPU denoiser + runaway guard
-./wc "World Creator 2026.4" --no-denoise  # baseline
-./wc "World Creator 2025.1"               # any other installed version (2025.1 needs no guard)
+```sh
+./install-wc.sh --portable "/path/to/World Creator 2026.4"
 ```
 
-`world-creator-denoise` / `world-creator` stay as 2026.4 shortcuts. The scripts resolve their own directory; keep them next to `wineprefix/` and `nvlibs-build/`.
+Repair app-menu and CLI entries without reinstalling:
 
-**Side-by-side .NET caveat:** 2025.x (net8) + 2026.x (net10) in one prefix means both runtimes are installed. Fine on clean installs — the explicit `DOTNET_ROOT` the launcher sets resolves the right framework per `runtimeconfig` — but never hand-edit the `HKLM\SOFTWARE\dotnet` registry tree; a corrupted one is what produces the ".NET Desktop Runtime" dialog (see Gotchas).
+```sh
+./install-wc.sh --portable "$PWD/wineprefix/drive_c/Program Files/World Creator 2026.4" --launcher-only
+```
 
-## Gotchas
+`--prefix DIR` selects another prefix. `world-creator` and
+`world-creator-denoise` remain shortcuts for 2026.4; `build.sh` repairs that
+version's existing installation.
 
-- **The apphost must be pointed at the in-prefix runtime.** `WorldCreator.exe` has no embedded search path; it resolves the runtime from `DOTNET_ROOT[_X64]`, else the registry key `HKLM\SOFTWARE\dotnet\Setup\InstalledVersions\x64\InstallLocation`, else the `%ProgramFiles%\dotnet` known-folder. A host `DOTNET_ROOT=/usr/share/dotnet` leaks into Wine and mis-resolves to `Z:\usr\share\dotnet`; merely clearing it then leaves resolution on the registry/known-folder probe, which yields "must install .NET Desktop Runtime" whenever that registry key is missing (the desktop-runtime installer writes it; deleting `HKLM\SOFTWARE\dotnet` drops it). The launchers set `DOTNET_ROOT='C:\Program Files\dotnet'` — an explicit Windows path that overrides the leak and skips the probe entirely.
-- **`mscoree` must stay builtin at run time.** Disabling it to skip the Mono prompt during init is fine, but an `mscoree=d` override while running makes the CoreCLR managed assemblies fail to load with a misleading "Module not found".
-- **EGL warning spam.** The NVIDIA EGL driver prints `failed to create dri2 screen` repeatedly. It is harmless, but piping it to a terminal that cannot drain it fast enough blocks the application's stdout and hangs it at the splash. The launchers log to a file and set `EGL_LOG_LEVEL=fatal`.
+## NVIDIA denoise
 
-## GPU denoise
+World Creator uses Veldrid/Vulkan directly; DXVK is unnecessary. Its GPU-only
+Open Image Denoise backend needs these pieces:
 
-The viewport denoiser is Intel Open Image Denoise 2.3.3, GPU backends only; on NVIDIA it needs `nvcuda.dll` (the CUDA Driver API). `install-wc.sh` assembles the pieces it requires, and `wc` (incl. `world-creator-denoise`) enables them.
+- **Veldrid patch:** resolve `vkGetMemoryWin32HandleKHR` through the device
+  proc address. The instance lookup returns NULL under Wine.
+- **nvcuda bridge:** [nvidia-libs] forwards the Windows CUDA driver API to host
+  `libcuda.so.1`. Our patch imports Vulkan shared memory through D3DKMT instead
+  of Proton's unavailable shared-resource ioctl.
+- **Prefix DLL:** `wineprefix/drive_c/windows/system32/nvcuda.dll` must point to
+  `nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll`.
+- **Driver lookup:** `wc` adds `/run/opengl-driver/lib` to `LD_LIBRARY_PATH`
+  on NixOS so the bridge can load CUDA.
 
-- **`nvcuda.dll` in the prefix `system32`** — OIDN's CUDA backend does `LoadLibrary("nvcuda.dll")`, and the `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH` the launcher sets are **not** enough on their own: the bridge's PE half must be visible in the prefix's `system32`, or the denoiser toggles on and silently does nothing. `install-wc.sh` symlinks it (`…/nvlibs-build/lib/wine/x86_64-windows/nvcuda.dll`).
-- **`vcrun2022` (MSVC runtime) — required to launch.** `WorldCreator.exe`'s native libraries link the Microsoft Visual C++ runtime; without it the .NET app won't start at all (coreclr/`libicuuc` load failure). `install-wc.sh` installs it. (An OIDN `_device_cpu.dll` is a dead end — it never denoises, only renders **black** — so don't add one.)
+Rebuild the bridge after changing Wine's internal ABI: remove its generated
+`nvlibs-build/build.64` directory and rerun the installer. The installer also
+renames the separate, unused Octane path tracer to `octane.dll.OFF`.
 
-**DXVK is not needed** — World Creator is Vulkan-native (Veldrid → winevulkan), so nothing translates D3D. Leave-one-out on 2025.1 (deterministic) confirms the **minimal denoise set**: the Veldrid patch, the D3DKMT bridge patch, the nvcuda bridge + `system32` symlink, and `vcrun2022` — removing any one breaks denoise (crash / black / black / no-launch). DXVK and fonts do not.
+## Troubleshooting
 
-- **nvcuda bridge** — built from [nvidia-libs](https://github.com/SveSop/nvidia-libs), forwarding the CUDA Driver API to host `libcuda.so`. It loads as a builtin split DLL via `WINEDLLOVERRIDES=nvcuda=b` + `WINEDLLPATH`.
-- **Bridge patch (`tools/patch-nvcuda/`)** — OIDN imports the Vulkan buffers via `cuImportExternalMemory` (`OPAQUE_WIN32`). The stock bridge resolves the handle through Proton's `IOCTL_SHARED_GPU_RESOURCE` device, absent in Wine 11.11, so the import fails and denoise renders black. The patch opens the handle's D3DKMT shared resource instead, the way win32u does.
-- **Veldrid patch (`tools/patch-veldrid/`)** — `vkGetMemoryWin32HandleKHR` is resolved via the device proc-addr; the instance proc-addr returns NULL under winevulkan, and the unguarded NULL otherwise faults at address 0 on the first external buffer.
-- **Octane disabled** — `octane.dll` is renamed to `octane.dll.OFF`. It is a separate bundled CUDA path tracer that builds its own RAM-sized host pool; the Vulkan renderer and OIDN do not need it.
+- Logs are written beside `wc` as `wc-World_Creator_<version>_.log`.
+  Set `WINEDEBUG=+nvcuda` when checking CUDA initialization.
+- `wc` sets `DOTNET_ROOT` to `C:\Program Files\dotnet`; a Linux runtime path
+  inherited by Wine causes misleading missing-runtime dialogs. Keep both
+  Windows Desktop Runtime generations installed; do not edit their registry
+  registrations by hand.
+- Keep `mscoree` builtin. Disabling it at runtime prevents managed assemblies
+  from loading.
+- Do not install an OIDN CPU backend as a substitute for the GPU bridge.
+- Avoid native `dwrite` overrides or copied DLLs when applying the font fix:
+  update Wine itself, so text rendering retains its Unix backend.
 
-## The startup memory runaway (World Creator 2025.2 and later)
+## Verify the Wine font fix
 
-Some World Creator versions enter a memory runaway during startup: a few seconds in, the process begins committing host memory at ~2.5 GB/s and climbs toward tens of GB without settling, until it is killed. It does not recover on its own; left alone it exhausts host RAM and starves the desktop.
+`tools/check-dwrite.c` checks a synthetic one-font collection without launching
+World Creator or allocating a font set. Build it with a working MinGW toolchain
+and run it with Wine; success reports `faces=1 expected=1` and exits zero.
+On NixOS, compile inside `nix-shell -p pkgsCross.mingwW64.stdenv.cc`.
 
-It is **bimodal and non-deterministic**. The same build, same machine, same inputs boots clean on some attempts (RSS settles ~1.5 GB and the session is stable for its whole life, large terrains and high resolution included) and runs away on others, with no relation to anything the user does. The clean rate is **machine-dependent and can be low** — on an RTX 5080 it has been ~1 in 10 (seven-plus runaways before a clean boot), so the relaunch loop may need many tries.
+```sh
+x86_64-w64-mingw32-gcc tools/check-dwrite.c -o tools/check-dwrite.exe -luuid
+wine tools/check-dwrite.exe
+```
 
-### What it is — and is not
-
-A version bisect places the regression precisely: **2025.1 never runs away; 2025.2 is the first version that does, and every version since (2025.3, 2025.6, 2026.1 … 2026.4) inherits it.** So it is a change in World Creator's own startup code, confirmed by ruling out every external factor:
-
-- **Not the wine version** — 11.8, 11.9, 11.10 and 11.11 all run away at the same rate.
-- **Not swap or the reported pagefile** — disabling swap does not help; the runaway still claims host memory.
-- **Not the GPU-denoise / CUDA path** — the baseline renderer with no `nvcuda` bridge loaded runs away too; the bridge is not required to trigger it.
-- **Not the .NET runtime** — 2025.1 and 2025.6 are both `net8` and both run on the same installed runtime via roll-forward, yet one is clean and the other is not.
-- **Not boundable by a memory cap** — World Creator does not size its allocation to any reported figure, so caps do nothing and runaways blow straight past them; a `sysinfo` shim and a `vkheapcap` Vulkan layer were both tried and removed as no-ops.
-
-The diverging factor between a clean and a runaway boot is internal timing in World Creator's (obfuscated) startup, not any value the environment can set — which is why it presents as random and cannot be fixed from outside the application. The relaunch guard below is the only thing that helps.
-
-### Living with it
-
-- **For reliable GPU denoise, use World Creator 2025.1** with the Veldrid patch (`install-wc.sh` applies it). 2025.1 boots clean every time and denoises on the RTX 5080.
-- **On 2025.2 and later (including 2026.x)** the runaway is unavoidable in World Creator's code, so `world-creator-denoise` works around it rather than preventing it: it guards the startup window with a hard RSS kill-switch (kill at 5 GB RSS or below 12 GB `MemAvailable`), kills a filling boot before it can starve the host, and relaunches until one lands clean. At a ~1-in-10 clean rate that can take many tries, so the default ceiling is 30 (`WC_MAX_TRIES`). That is the "it works sometimes" behaviour made automatic. Once a boot is clean the guard disarms, and on exit (quit, Ctrl-C, or close) it reaps its whole wine session so nothing lingers. Tunable via `WC_KILL_RSS_MB`, `WC_GUARD_WINDOW_S`, `WC_MAX_TRIES`.
 
 ## License
 
-The patches and launchers here are MIT. World Creator, the .NET runtime, and nvidia-libs are separate works under their own licenses.
+These launchers and patches are MIT. World Creator, .NET, Wine, and nvidia-libs
+retain their respective licenses.
+
+[the TTC header fix]: https://github.com/wine-mirror/wine/commit/a6fc12e4a94bf4dae2d5c3a297794107627dad0a
+[nvidia-libs]: https://github.com/SveSop/nvidia-libs
